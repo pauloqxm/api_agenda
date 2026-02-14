@@ -69,8 +69,6 @@ body{
   box-shadow:0 10px 30px rgba(0,0,0,.35);
 }
 
-.logo svg{width:22px;height:22px}
-
 .title h1{
   margin:0;
   font-size:18px;
@@ -95,15 +93,6 @@ select,button{
   color:var(--text);
   padding:10px 12px;
   font-size:14px;
-  outline:none;
-}
-
-select{min-width:240px}
-
-button{
-  cursor:pointer;
-  font-weight:700;
-  transition:.2s;
 }
 
 .btnAccent{
@@ -175,7 +164,12 @@ button{
   margin:10px 0 0;
   padding-left:8px;
   font-size:13px;
-  color:rgba(234,242,255,.9);
+  line-height:1.5;
+}
+
+.desc span{
+  font-weight:700;
+  color:var(--accent);
 }
 
 .empty{
@@ -196,12 +190,7 @@ button{
 
 <div class="top">
   <div class="brand">
-    <div class="logo">
-      <svg viewBox="0 0 24 24" fill="none">
-        <path d="M7 3v3M17 3v3M4 8h16M6 6h12a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2Z"
-        stroke="currentColor" stroke-width="2"/>
-      </svg>
-    </div>
+    <div class="logo"></div>
     <div class="title">
       <h1>Agenda Semanal</h1>
       <small>Semana fixa de segunda a domingo</small>
@@ -229,9 +218,7 @@ button{
 const API_BASE="https://api-agenda.up.railway.app";
 const $=(id)=>document.getElementById(id);
 
-function isoDate(d){
-  return d.toISOString().split("T")[0];
-}
+function isoDate(d){return d.toISOString().split("T")[0];}
 
 function getMonday(d){
   const x=new Date(d);
@@ -242,8 +229,13 @@ function getMonday(d){
   return x;
 }
 
-function fmtBR(date){
-  return new Date(date).toLocaleDateString("pt-BR");
+function fmtBR(date){return new Date(date).toLocaleDateString("pt-BR");}
+
+function fmtHour(iso){
+  const d=new Date(iso);
+  const hh=String(d.getHours()).padStart(2,"0");
+  const mm=String(d.getMinutes()).padStart(2,"0");
+  return (hh==="00"&&mm==="00")?"":hh+":"+mm;
 }
 
 function renderCards(list){
@@ -253,7 +245,9 @@ function renderCards(list){
     grid.innerHTML='<div class="empty">Sem eventos nessa semana.</div>';
     return;
   }
+
   list.forEach(ev=>{
+    const ex=ev.extendedProps||{};
     const card=document.createElement("div");
     card.className="card";
 
@@ -263,11 +257,21 @@ function renderCards(list){
 
     const meta=document.createElement("div");
     meta.className="meta";
-    meta.innerHTML=`<div class="pill">${fmtBR(ev.start)}</div>`;
+    meta.innerHTML=`
+      <div class="pill">${fmtBR(ev.start)} ${fmtHour(ev.start)}</div>
+      ${ex.congregacao?`<div class="pill">${ex.congregacao}</div>`:""}
+      ${ex.turma_ebd?`<div class="pill">EBD ${ex.turma_ebd}</div>`:""}
+    `;
 
     const desc=document.createElement("div");
     desc.className="desc";
-    desc.textContent=ev.extendedProps?.observacoes || "Sem detalhes.";
+    desc.innerHTML=`
+      ${ex.tipo?`<span>Tipo</span> ${ex.tipo}<br>`:""}
+      ${ex.subtipo?`<span>Subtipo</span> ${ex.subtipo}<br>`:""}
+      ${(ex.dirigente1||ex.dirigente2||ex.dirigente3)?
+        `<span>Dirigentes</span> ${[ex.dirigente1,ex.dirigente2,ex.dirigente3].filter(Boolean).join(", ")}<br>`:""}
+      ${ex.observacoes?`<span>Obs</span> ${ex.observacoes}`:""}
+    `;
 
     card.appendChild(title);
     card.appendChild(meta);
@@ -292,10 +296,8 @@ async function loadWeek(){
   const start=getMonday(now);
   const end=new Date(start);
   end.setDate(end.getDate()+7);
-
   const dom=new Date(start);
   dom.setDate(dom.getDate()+6);
-
   $("rangeTxt").textContent=`${fmtBR(start)} até ${fmtBR(dom)}`;
 
   const url=new URL(API_BASE+"/calendario");
