@@ -1,51 +1,35 @@
 import os
 from datetime import date, datetime, time
-from typing import Optional
+from pathlib import Path
 
 from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import RedirectResponse, FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from db import get_db_connection, SCHEMA, test_db_connection
 
 TABLE = os.getenv("DB_TABLE", "eventos")
 
+BASE_DIR = Path(__file__).resolve().parent
+STATIC_DIR = Path(os.getenv("STATIC_DIR", str(BASE_DIR / "static")))
+
 app = FastAPI(title="Agenda API")
 
-# CORS liberado para consumir a API de qualquer domínio (HTML, WordPress, etc.)
-# Importante: allow_credentials NÃO pode ficar True com allow_origins=["*"] em browser.
+# API aberta (você pode manter assim)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=False,
-    allow_methods=["*"],
+    allow_credentials=True,
+    allow_methods=["GET"],
     allow_headers=["*"],
 )
 
-def _parse_date_any(v: str) -> date:
-    """
-    Aceita:
-      - 'YYYY-MM-DD'
-      - 'YYYY-MM-DDTHH:MM:SS'
-      - 'YYYY-MM-DDTHH:MM:SSZ'
-      - 'YYYY-MM-DDTHH:MM:SS+00:00'
-    Retorna date.
-    """
-    if v is None:
-        raise ValueError("Data vazia")
+# Se existir pasta static, monta para servir arquivos como /agenda.html
+if STATIC_DIR.exists():
+    app.mount("/", StaticFiles(directory=str(STATIC_DIR), html=True), name="static")
 
-    s = str(v).strip()
-    if not s:
-        raise ValueError("Data vazia")
-
-    # pega os 10 primeiros chars se vier datetime ISO
-    s10 = s[:10]
-
-    try:
-        return datetime.strptime(s10, "%Y-%m-%d").date()
-    except Exception as e:
-        raise ValueError(f"Data inválida: {v}") from e
-
-def _parse_horario(h: Optional[str]) -> Optional[time]:
+def _parse_horario(h: str | None) -> time | None:
     if not h:
         return None
     h = str(h).strip()
@@ -53,34 +37,29 @@ def _parse_horario(h: Optional[str]) -> Optional[time]:
         return None
 
     try:
-        # "19:30" ou "19:30:00"
         if ":" in h:
             parts = h.split(":")
             hh = int(parts[0])
             mm = int(parts[1]) if len(parts) > 1 else 0
             return time(hour=hh, minute=mm)
-
-        # "1930"
         if len(h) == 4 and h.isdigit():
             return time(hour=int(h[:2]), minute=int(h[2:]))
-    except Exception:
+    except:
         return None
 
     return None
 
-def _to_iso_start(d: date, h: Optional[str]) -> str:
+def _to_iso_start(d: date, h: str | None) -> str:
     t = _parse_horario(h) or time(0, 0)
     return datetime.combine(d, t).isoformat()
 
 @app.get("/")
-def root():
-    return {
-        "ok": True,
-        "msg": "Agenda API online",
-        "health": "/health",
-        "docs": "/docs",
-        "endpoints": ["/congregacoes", "/calendario"]
-    }
+def home():
+    # Redireciona pro HTML se existir, senão mostra status da API
+    agenda_file = STATIC_DIR / "agenda.html"
+    if agenda_file.exists():
+        return RedirectResponse(url="/agenda.html")
+    return JSONResponse({"ok": True, "msg": "API online. Coloque static/agenda.html para abrir a agenda."})
 
 @app.get("/health")
 def health():
@@ -103,15 +82,12 @@ def congregacoes():
 
 @app.get("/calendario")
 def calendario(
-    start: str = Query(..., description="YYYY-MM-DD ou ISO datetime"),
-    end: str = Query(..., description="YYYY-MM-DD ou ISO datetime"),
-    congregacao: Optional[str] = Query(None, description="Filtro"),
+    start: date = Query(..., description="YYYY-MM-DD"),
+    end: date = Query(..., description="YYYY-MM-DD"),
+    congregacao: str | None = Query(None, description="Filtro"),
 ):
-    start_d = _parse_date_any(start)
-    end_d = _parse_date_any(end)
-
     where = ["data >= %(start)s", "data < %(end)s"]
-    params = {"start": start_d, "end": end_d}
+    params = {"start": start, "end": end}
 
     if congregacao:
         where.append("congregacao = %(congregacao)s")
@@ -153,14 +129,12 @@ def calendario(
         title = " | ".join(title_parts) if title_parts else f"Evento {d.get('id')}"
         start_iso = _to_iso_start(d["data"], d.get("horario"))
 
-        eventos.append(
-            {
-                "id": d.get("id"),
-                "title": title,
-                "start": start_iso,
-                "allDay": False if d.get("horario") else True,
-                "extendedProps": d,
-            }
-        )
+        eventos.append({
+            "id": d.get("id"),
+            "title": title,
+            "start": start_iso,
+            "allDay": False if d.get("horario") else True,
+            "extendedProps": d
+        })
 
     return eventos
