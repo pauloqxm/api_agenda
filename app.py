@@ -4,31 +4,35 @@ from pathlib import Path
 
 from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import RedirectResponse, FileResponse, JSONResponse
-from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse, JSONResponse
 
 from db import get_db_connection, SCHEMA, test_db_connection
 
+# ============================================================
+# Config
+# ============================================================
 TABLE = os.getenv("DB_TABLE", "eventos")
 
-BASE_DIR = Path(__file__).resolve().parent
-STATIC_DIR = Path(os.getenv("STATIC_DIR", str(BASE_DIR / "static")))
+# Onde fica o HTML do calendário no deploy
+# Dica: coloque o arquivo agenda.html na raiz do projeto ou numa pasta "static/"
+AGENDA_HTML_PATH = os.getenv("AGENDA_HTML_PATH", "agenda.html")
 
 app = FastAPI(title="Agenda API")
 
-# API aberta (você pode manter assim)
+# ============================================================
+# CORS
+# ============================================================
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
     allow_credentials=True,
-    allow_methods=["GET"],
+    allow_methods=["GET", "OPTIONS"],
     allow_headers=["*"],
 )
 
-# Se existir pasta static, monta para servir arquivos como /agenda.html
-if STATIC_DIR.exists():
-    app.mount("/", StaticFiles(directory=str(STATIC_DIR), html=True), name="static")
-
+# ============================================================
+# Helpers
+# ============================================================
 def _parse_horario(h: str | None) -> time | None:
     if not h:
         return None
@@ -44,28 +48,84 @@ def _parse_horario(h: str | None) -> time | None:
             return time(hour=hh, minute=mm)
         if len(h) == 4 and h.isdigit():
             return time(hour=int(h[:2]), minute=int(h[2:]))
-    except:
+    except Exception:
         return None
 
     return None
+
 
 def _to_iso_start(d: date, h: str | None) -> str:
     t = _parse_horario(h) or time(0, 0)
     return datetime.combine(d, t).isoformat()
 
+
+def _resolve_agenda_html() -> Path | None:
+    # 1) caminho direto
+    p = Path(AGENDA_HTML_PATH)
+    if p.exists() and p.is_file():
+        return p
+
+    # 2) tenta static/agenda.html
+    p2 = Path("static") / "agenda.html"
+    if p2.exists() and p2.is_file():
+        return p2
+
+    # 3) tenta public/agenda.html
+    p3 = Path("public") / "agenda.html"
+    if p3.exists() and p3.is_file():
+        return p3
+
+    return None
+
+
+# ============================================================
+# Rotas básicas para evitar "Not Found" e facilitar debug
+# ============================================================
 @app.get("/")
-def home():
-    # Redireciona pro HTML se existir, senão mostra status da API
-    agenda_file = STATIC_DIR / "agenda.html"
-    if agenda_file.exists():
-        return RedirectResponse(url="/agenda.html")
-    return JSONResponse({"ok": True, "msg": "API online. Coloque static/agenda.html para abrir a agenda."})
+def root():
+    return {
+        "ok": True,
+        "service": "Agenda API",
+        "routes": ["/docs", "/health", "/agenda.html", "/congregacoes", "/calendario"],
+        "schema": SCHEMA,
+        "table": f"{SCHEMA}.{TABLE}",
+    }
+
 
 @app.get("/health")
 def health():
     ok, msg = test_db_connection()
     return {"ok": ok, "msg": msg, "schema": SCHEMA, "table": f"{SCHEMA}.{TABLE}"}
 
+
+@app.get("/agenda.html")
+def agenda_html():
+    # Serve o HTML dentro do MESMO deploy no Railway
+    p = _resolve_agenda_html()
+    if not p:
+        return JSONResponse(
+            status_code=404,
+            content={
+                "ok": False,
+                "detail": "agenda.html não encontrado no deploy. Coloque o arquivo na raiz do projeto, ou em static/, ou defina AGENDA_HTML_PATH.",
+            },
+        )
+
+    # FileResponse já seta Content-Type por extensão
+    return FileResponse(
+        path=str(p),
+        media_type="text/html; charset=utf-8",
+        headers={
+            # Evita cache chato durante ajustes
+            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+            "Pragma": "no-cache",
+        },
+    )
+
+
+# ============================================================
+# API de dados
+# ============================================================
 @app.get("/congregacoes")
 def congregacoes():
     sql = f"""
@@ -79,6 +139,7 @@ def congregacoes():
             cur.execute(sql)
             rows = cur.fetchall()
     return {"congregacoes": [r[0] for r in rows]}
+
 
 @app.get("/calendario")
 def calendario(
@@ -129,12 +190,14 @@ def calendario(
         title = " | ".join(title_parts) if title_parts else f"Evento {d.get('id')}"
         start_iso = _to_iso_start(d["data"], d.get("horario"))
 
-        eventos.append({
-            "id": d.get("id"),
-            "title": title,
-            "start": start_iso,
-            "allDay": False if d.get("horario") else True,
-            "extendedProps": d
-        })
+        eventos.append(
+            {
+                "id": d.get("id"),
+                "title": title,
+                "start": start_iso,
+                "allDay": False if d.get("horario") else True,
+                "extendedProps": d,
+            }
+        )
 
     return eventos
